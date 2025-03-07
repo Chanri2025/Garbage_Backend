@@ -50,7 +50,7 @@ def predict():
 
 @app.route('/')
 def home():
-    return "Hello from Render + Flask!"
+    return "Hello Word!"
 
 
 if __name__ == "__main__":
