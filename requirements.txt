@@ -5,3 +5,4 @@ opencv-python==4.7.0.72
 scikit-image==0.19.3
 scikit-learn==1.2.2
 joblib==1.2.0
+gunicorn==20.1.0
