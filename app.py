@@ -10,7 +10,7 @@ app = Flask(__name__)
 CORS(app)
 
 # Load the pre-trained model, scaler, and PCA objects once at startup.
-model = joblib.load("waste_classification_svm.pkl")
+model = joblib.load("waste_classification_xgb.pkl")
 scaler = joblib.load("scaler.pkl")
 pca = joblib.load("pca.pkl")
 
@@ -34,7 +34,7 @@ def predict():
     # Preprocess the image to match training conditions:
     img = cv2.resize(img, (64, 64), interpolation=cv2.INTER_AREA)
     # Extract HOG features using the same parameters used during training.
-    hog_features = hog(img, pixels_per_cell=(8, 8), cells_per_block=(2, 2), block_norm='L2-Hys')
+    hog_features = hog(img, pixels_per_cell=(8, 8), cells_per_block=(3, 3), block_norm='L2-Hys')
     hog_features = np.array(hog_features).reshape(1, -1)
 
     # Apply the scaler and PCA transformations
