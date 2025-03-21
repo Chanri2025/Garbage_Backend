@@ -5,4 +5,4 @@ scikit-image==0.19.3
 scikit-learn==1.2.2
 joblib==1.2.0
 xgboost==1.7.5
-gunicorn  # Needed for Flask deployment in Render
+gunicorn
