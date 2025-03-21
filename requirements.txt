@@ -1,8 +1,9 @@
 Flask==2.2.5
 Flask-Cors==3.0.10
 numpy==1.23.5
-opencv-python==4.7.0.72
+opencv-python-headless==4.7.0.72  # Use 'headless' for better compatibility in servers
 scikit-image==0.19.3
 scikit-learn==1.2.2
 joblib==1.2.0
-xgboost==1.7.5  # or whichever version you used
+xgboost==1.7.5
+gunicorn  # Needed for Flask deployment in Render
