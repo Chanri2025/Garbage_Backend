@@ -7,3 +7,4 @@ joblib==1.2.0
 xgboost==1.7.5
 gunicorn
 opencv-python-headless
+cloudinary==1.37.0  # Latest stable version (March 2025)
