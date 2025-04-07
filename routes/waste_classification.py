@@ -15,9 +15,9 @@ from config.mongo_connection import db
 # Configure Cloudinary
 cloudinary.config(
     cloud_name="dxh2mrunr",
-    api_key="649126329594194",
-    api_secret="07ntTHEndaWtj9fHDPZMfBWIWoo",  # Replace with your actual API secret
-    secure=True
+    api_key="595799598446626",
+    api_secret="lqx5xZKmkBYQFEo2geMo8Ml_wto",
+    secure=True,
 )
 
 predictions_collection = db["predictions"]
