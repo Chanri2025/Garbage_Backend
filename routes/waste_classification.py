@@ -20,7 +20,7 @@ cloudinary.config(
     secure=True,
 )
 
-predictions_collection = db["predictions"]
+predictions_collection = db["prediction"]
 waste_classification_bp = Blueprint("waste_classification", __name__)
 
 try:
@@ -93,6 +93,7 @@ def compress_image(image):
 
 @waste_classification_bp.route("/predict", methods=["POST"])
 def predict():
+    print("Using DB:", db.name)  # Should print "swm"
     if model is None or scaler is None or pca is None:
         return jsonify({"error": "Model or preprocessing objects are not loaded."}), 500
 
@@ -145,6 +146,7 @@ def predict():
             "timestamp": datetime.now()
         }
         result = predictions_collection.insert_one(prediction_record)
+
 
         # Attach the inserted _id as string for JSON response
         prediction_record["_id"] = str(result.inserted_id)
