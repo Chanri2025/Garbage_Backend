@@ -11,7 +11,7 @@ carbon_credit_collection = db["carbon_footprint_collections"]
 def calculate_carbon_footprint():
     try:
         data = request.json
-        reference_id = data.get("reference_id")
+        device_id = data.get("device_id")
         house_id = data.get("house_id")
         date_str = data.get("date")
         total_waste = float(data.get("total_waste", 0))
@@ -45,7 +45,7 @@ def calculate_carbon_footprint():
 
         # Prepare MongoDB document
         doc = {
-            "reference_id": reference_id,
+            "device_id": device_id,
             "house_id": house_id,
             "carbon_footprint": round(carbon_footprint, 2),
             "total_waste": round(total_waste, 2),
