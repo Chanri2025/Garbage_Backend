@@ -37,7 +37,7 @@ def calculate_carbon_footprint():
                 return jsonify({"error": "Date format must be 'DD/MM/YYYY HH:MM[:SS]'"}), 400
 
         # Calculate carbon footprint in kg
-        carbon_footprint = ((wet_waste * 0.7 * 26) + (dry_waste * 1.45)) / 1000
+        carbon_footprint = total_co2_eq / 1000
 
         # Get current timestamp in IST
         ist = pytz.timezone('Asia/Kolkata')
@@ -47,7 +47,7 @@ def calculate_carbon_footprint():
         doc = {
             "device_id": device_id,
             "house_id": house_id,
-            "carbon_footprint": round(carbon_footprint, 2),
+            "carbon_footprint": round(carbon_footprint, 5),
             "total_waste": round(total_waste, 2),
             "wet_waste": round(wet_waste, 2),
             "dry_waste": round(dry_waste, 2),
