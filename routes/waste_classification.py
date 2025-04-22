@@ -1,4 +1,5 @@
-from flask import Blueprint, request, jsonify
+import requests
+from flask import request, jsonify, Blueprint
 import joblib
 import cv2
 import numpy as np
@@ -9,15 +10,17 @@ import cloudinary
 import cloudinary.uploader
 from datetime import datetime
 import io
+from config.mongo_connection import db
 
 # Configure Cloudinary
 cloudinary.config(
     cloud_name="dxh2mrunr",
-    api_key="649126329594194",
-    api_secret="07ntTHEndaWtj9fHDPZMfBWIWoo",  # Replace with your actual API secret
-    secure=True
+    api_key="595799598446626",
+    api_secret="lqx5xZKmkBYQFEo2geMo8Ml_wto",
+    secure=True,
 )
 
+predictions_collection = db["prediction"]
 waste_classification_bp = Blueprint("waste_classification", __name__)
 
 try:
@@ -33,6 +36,13 @@ except Exception as e:
     logging.error(f"Error loading model or preprocessing objects: {str(e)}")
     model, scaler, pca = None, None, None
 
+def get_public_ip():
+    try:
+        response = requests.get('https://api.ipify.org?format=json')
+        return response.json()['ip']
+    except Exception as e:
+        logging.error(f"Error getting public IP: {str(e)}")
+        return "Unknown"
 
 def preprocess_image(image):
     try:
@@ -83,6 +93,7 @@ def compress_image(image):
 
 @waste_classification_bp.route("/predict", methods=["POST"])
 def predict():
+    print("Using DB:", db.name)  # Should print "swm"
     if model is None or scaler is None or pca is None:
         return jsonify({"error": "Model or preprocessing objects are not loaded."}), 500
 
@@ -107,8 +118,8 @@ def predict():
         prediction = model.predict(dmatrix)
 
         # Determine class label
-        waste_type = 1 if prediction[0] >= 0.5 else 0
-        waste_description = "Non-Segregated Waste" if waste_type == 1 else "Segregated Waste"
+        waste_type = 0 if prediction[0] >= 0.5 else 1
+        waste_description = "Non-Segregated Waste" if waste_type == 0 else "Segregated Waste"
 
         # Compress image to under 50KB
         compressed_image = compress_image(img)
@@ -119,16 +130,29 @@ def predict():
         upload_result = cloudinary.uploader.upload(compressed_image, public_id=filename, resource_type="image")
 
         image_url = upload_result.get("secure_url", "")
-
-        # Optimize delivery further via Cloudinary
         optimized_url, _ = cloudinary.utils.cloudinary_url(filename, fetch_format="auto", quality="auto:low")
 
-        return jsonify({
+        # Get client IP address
+        ip_address = get_public_ip()
+
+        # Save to MongoDB
+        prediction_record = {
+            "house_id": house_id,
             "waste_type": waste_type,
             "waste_description": waste_description,
             "image_url": image_url,
-            "optimized_image_url": optimized_url
-        })
+            "optimized_image_url": optimized_url,
+            "ip_address": ip_address,
+            "timestamp": datetime.now()
+        }
+        result = predictions_collection.insert_one(prediction_record)
+
+
+        # Attach the inserted _id as string for JSON response
+        prediction_record["_id"] = str(result.inserted_id)
+
+        return jsonify(prediction_record)
+
     except Exception as e:
         logging.error(f"Error in prediction: {str(e)}")
         return jsonify({"error": "Internal server error"}), 500

@@ -12,14 +12,14 @@ CORS(app, resources={r"/*": {"origins": "*"}})  # Allow CORS for all routes
 logging.basicConfig(level=logging.INFO)
 
 # Register Blueprints
-app.register_blueprint(carbon_footprint_bp)
+app.register_blueprint(carbon_footprint_bp,url_prefix="")
 app.register_blueprint(waste_classification_bp)
 
 @app.route("/")
 def home():
-    return "Waste Classification and Carbon Footprint API is running!"
+    return "SWM AI is running!"
 
 if __name__ == "__main__":
     import os
-    port = int(os.environ.get("PORT", 5000))  # Use environment PORT or default to 5000
-    app.run(host="0.0.0.0", port=port, debug=False)
+    port = int(os.environ.get("PORT", 6000))
+    app.run(host="0.0.0.0", port=port, debug=True)
