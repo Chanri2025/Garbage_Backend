@@ -1,10 +1,12 @@
 Flask==2.2.5
 Flask-Cors==3.0.10
-numpy==1.23.5
-scikit-image==0.19.3
+numpy~=1.26.4
+scikit-image~=0.25.2
 scikit-learn==1.2.2
 joblib==1.2.0
 xgboost==1.7.5
 gunicorn
 opencv-python-headless
 cloudinary==1.37.0  # Latest stable version (March 2025)
+pytz~=2024.2
+opencv-python~=4.11.0.86
