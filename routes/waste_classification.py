@@ -1,18 +1,24 @@
-import requests
-from flask import request, jsonify, Blueprint
-import joblib
+import io
 import cv2
 import numpy as np
-from skimage.feature import hog
 import logging
-import xgboost as xgb
+import requests
+from datetime import datetime, timezone
+
+from flask import Blueprint, request, jsonify
+from ultralytics import YOLO
+
 import cloudinary
 import cloudinary.uploader
-from datetime import datetime
-import io
+
+from PIL import Image
+import pillow_heif  # for HEIC support
+
+pillow_heif.register_heif_opener()
+
 from config.mongo_connection import db
 
-# Configure Cloudinary
+# ─── Cloudinary Configuration ────────────────────────────────────────────────
 cloudinary.config(
     cloud_name="dxh2mrunr",
     api_key="595799598446626",
@@ -20,139 +26,158 @@ cloudinary.config(
     secure=True,
 )
 
-predictions_collection = db["prediction"]
+# ─── Blueprint & Mongo Collection ────────────────────────────────────────────
 waste_classification_bp = Blueprint("waste_classification", __name__)
+predictions_collection = db["prediction"]
 
-try:
-    # Load XGBoost model from JSON
-    model = xgb.Booster()
-    model.load_model("waste_classification_xgb.json")
+# ─── Load ONNX YOLO Model ────────────────────────────────────────────────────
+yolo = YOLO("best.onnx")  # adjust path as needed
 
-    # Load scaler and PCA
-    scaler = joblib.load("scaler.pkl")
-    pca = joblib.load("pca.pkl")
-    logging.info("Model (JSON), Scaler, and PCA loaded successfully.")
-except Exception as e:
-    logging.error(f"Error loading model or preprocessing objects: {str(e)}")
-    model, scaler, pca = None, None, None
 
 def get_public_ip():
     try:
-        response = requests.get('https://api.ipify.org?format=json')
-        return response.json()['ip']
+        return requests.get("https://api.ipify.org?format=json").json().get("ip", "Unknown")
     except Exception as e:
-        logging.error(f"Error getting public IP: {str(e)}")
+        logging.error(f"Error fetching IP: {e}")
         return "Unknown"
 
-def preprocess_image(image):
-    try:
-        img_resized = cv2.resize(image, (64, 64), interpolation=cv2.INTER_AREA)
 
-        if len(img_resized.shape) == 3 and img_resized.shape[2] == 3:
-            img_gray = cv2.cvtColor(img_resized, cv2.COLOR_BGR2GRAY)
-        else:
-            img_gray = img_resized
-
-        features = hog(img_gray, pixels_per_cell=(8, 8), cells_per_block=(3, 3), block_norm='L2-Hys')
-        features = np.array(features).reshape(1, -1)
-
-        features = scaler.transform(features)
-        features = pca.transform(features)
-
-        return features
-    except Exception as e:
-        logging.error(f"Error in image preprocessing: {str(e)}")
-        raise ValueError("Failed to preprocess image.")
-
-
-def compress_image(image):
-    """Compress the image to ensure it's under 50KB."""
-    try:
-        # Resize image to a smaller size (keeping aspect ratio)
-        max_size = (300, 300)  # Adjust based on needs
-        image = cv2.resize(image, max_size, interpolation=cv2.INTER_AREA)
-
-        # Convert image to bytes with compression
-        is_success, buffer = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 50])
-        if not is_success:
-            raise ValueError("Image compression failed.")
-
-        # Check size and further reduce if needed
-        image_bytes = buffer.tobytes()
-        while len(image_bytes) > 50 * 1024:  # 50KB
-            is_success, buffer = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 40])
-            if not is_success:
-                raise ValueError("Image compression failed.")
-            image_bytes = buffer.tobytes()
-
-        return io.BytesIO(image_bytes)
-    except Exception as e:
-        logging.error(f"Error in image compression: {str(e)}")
-        raise ValueError("Failed to compress image.")
+def compress_to_bytes(img: np.ndarray) -> io.BytesIO:
+    """
+    Resize & JPEG-compress an image until it's under 50KB,
+    then return it as an in-memory BytesIO.
+    """
+    img = cv2.resize(img, (300, 300), interpolation=cv2.INTER_AREA)
+    quality = 50
+    while True:
+        ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, quality])
+        if not ok:
+            raise ValueError("Image compression failed")
+        data = buf.tobytes()
+        if len(data) <= 50 * 1024 or quality <= 10:
+            return io.BytesIO(data)
+        quality -= 10
 
 
 @waste_classification_bp.route("/predict", methods=["POST"])
 def predict():
-    print("Using DB:", db.name)  # Should print "swm"
-    if model is None or scaler is None or pca is None:
-        return jsonify({"error": "Model or preprocessing objects are not loaded."}), 500
+    # 1) Validate input
+    if "image" not in request.files or "house_id" not in request.form:
+        return jsonify({"error": "Image file and house_id are required"}), 400
 
-    if 'image' not in request.files or 'house_id' not in request.form:
-        return jsonify({"error": "Image and house_id are required"}), 400
+    house_id = request.form["house_id"]
+    upload = request.files["image"]
 
-    house_id = request.form['house_id']
-    file = request.files['image']
+    # 2) Read raw bytes & convert via PIL → in-memory JPEG → OpenCV BGR
+    raw = upload.read()
+    try:
+        pil_img = Image.open(io.BytesIO(raw)).convert("RGB")
+        buf = io.BytesIO()
+        pil_img.save(buf, format="JPEG")
+        buf.seek(0)
 
-    # Convert the image to NumPy array
-    image_bytes = file.read()
-    image_np = np.frombuffer(image_bytes, np.uint8)
-    img = cv2.imdecode(image_np, cv2.IMREAD_COLOR)
-
-    if img is None:
-        return jsonify({"error": "Invalid image file"}), 400
+        arr = np.frombuffer(buf.read(), np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if img is None:
+            raise ValueError("cv2 failed to decode image")
+    except Exception as e:
+        logging.error(f"Failed to load/convert image: {e}")
+        return jsonify({"error": "Invalid image format"}), 400
 
     try:
-        # Process the image and get features
-        features = preprocess_image(img)
-        dmatrix = xgb.DMatrix(features)
-        prediction = model.predict(dmatrix)
+        # 3) Run ONNX detection (silenced terminal logs)
+        results = yolo.predict(
+            source=img,
+            imgsz=768,
+            conf=0.25,
+            verbose=False
+        )[0]
 
-        # Determine class label
-        waste_type = 0 if prediction[0] >= 0.5 else 1
-        waste_description = "Non-Segregated Waste" if waste_type == 0 else "Segregated Waste"
+        # 4) Build detections list
+        detections = []
+        for box, conf, cls in zip(
+                results.boxes.xyxy.cpu().numpy(),
+                results.boxes.conf.cpu().numpy(),
+                results.boxes.cls.cpu().numpy()
+        ):
+            x1, y1, x2, y2 = box.astype(int).tolist()
+            detections.append({
+                "class": results.names[int(cls)],
+                "confidence": float(conf),
+                "box": [x1, y1, x2, y2]
+            })
 
-        # Compress image to under 50KB
-        compressed_image = compress_image(img)
+        # 5) Summarize counts per class
+        counts = {}
+        for det in detections:
+            counts[det["class"]] = counts.get(det["class"], 0) + 1
 
-        # Upload compressed image to Cloudinary
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"{house_id}_{timestamp}.jpg"
-        upload_result = cloudinary.uploader.upload(compressed_image, public_id=filename, resource_type="image")
+        # 6) Extract performance metrics
+        perf = {
+            "pre_ms": round(results.speed["preprocess"], 2),
+            "inf_ms": round(results.speed["inference"], 2),
+            "post_ms": round(results.speed["postprocess"], 2),
+            "shape": [1, 3, 768, 768]
+        }
 
-        image_url = upload_result.get("secure_url", "")
-        optimized_url, _ = cloudinary.utils.cloudinary_url(filename, fetch_format="auto", quality="auto:low")
+        # 7) Compress & upload original image
+        compressed = compress_to_bytes(img)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        public_id = f"{house_id}_{ts}"
+        up = cloudinary.uploader.upload(
+            compressed,
+            public_id=public_id,
+            resource_type="image"
+        )
+        url = up["secure_url"]
+        opt_url, _ = cloudinary.utils.cloudinary_url(
+            public_id, fetch_format="auto", quality="auto:low"
+        )
 
-        # Get client IP address
-        ip_address = get_public_ip()
-
-        # Save to MongoDB
-        prediction_record = {
+        # 8) Assemble record for MongoDB
+        record = {
             "house_id": house_id,
-            "waste_type": waste_type,
-            "waste_description": waste_description,
-            "image_url": image_url,
-            "optimized_image_url": optimized_url,
-            "ip_address": ip_address,
+            "detections": detections,
+            "counts": counts,
+            "performance": perf,
+            "model": {
+                "name": "best.onnx",
+                "imgsz": 768,
+                "provider": "CPUExecutionProvider"
+            },
+            "image_url": url,
+            "optimized_url": opt_url,
+            "ip_address": get_public_ip(),
             "timestamp": datetime.now()
         }
-        result = predictions_collection.insert_one(prediction_record)
+        ins = predictions_collection.insert_one(record)
+        record["_id"] = str(ins.inserted_id)
 
+        # 9) Build optimized response
+        response = {
+            "id": record["_id"],
+            "house_id": record["house_id"],
+            "timestamp": record["timestamp"].astimezone(timezone.utc).isoformat(),
+            "ip_address": record["ip_address"],
 
-        # Attach the inserted _id as string for JSON response
-        prediction_record["_id"] = str(result.inserted_id)
+            "image": {
+                "original": record["image_url"],
+                "optimized": record["optimized_url"]
+            },
 
-        return jsonify(prediction_record)
+            "detections": record["detections"],
+            "counts": record["counts"],
+            "performance": {
+                "pre_ms": record["performance"]["pre_ms"],
+                "inf_ms": record["performance"]["inf_ms"],
+                "post_ms": record["performance"]["post_ms"]
+            },
+
+            "model": record["model"]
+        }
+
+        return jsonify(response), 200
 
     except Exception as e:
-        logging.error(f"Error in prediction: {str(e)}")
+        logging.error(f"Prediction error: {e}")
         return jsonify({"error": "Internal server error"}), 500
