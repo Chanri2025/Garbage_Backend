@@ -10,15 +10,16 @@ from ultralytics import YOLO
 
 import cloudinary
 import cloudinary.uploader
+import cloudinary.utils
 
 from PIL import Image
-import pillow_heif  # for HEIC support
+import pillow_heif  # For HEIC support
 
 pillow_heif.register_heif_opener()
 
 from config.mongo_connection import db
 
-# ─── Cloudinary Configuration ────────────────────────────────────────────────
+# ─── Cloudinary Configuration ────────────────────────────────────────
 cloudinary.config(
     cloud_name="dxh2mrunr",
     api_key="595799598446626",
@@ -26,12 +27,12 @@ cloudinary.config(
     secure=True,
 )
 
-# ─── Blueprint & Mongo Collection ────────────────────────────────────────────
+# ─── Blueprint & Mongo Collection ────────────────────────────────────
 waste_classification_bp = Blueprint("waste_classification", __name__)
 predictions_collection = db["prediction"]
 
-# ─── Load ONNX YOLO Model ────────────────────────────────────────────────────
-yolo = YOLO("best.onnx")  # adjust path as needed
+# ─── Load YOLO ONNX Model ────────────────────────────────────────────
+yolo = YOLO("best.onnx")  # Adjust model path as needed
 
 
 def get_public_ip():
@@ -66,9 +67,10 @@ def predict():
         return jsonify({"error": "Image file and house_id are required"}), 400
 
     house_id = request.form["house_id"]
+    subfolder = request.form.get("subfolder", "test")
     upload = request.files["image"]
 
-    # 2) Read raw bytes & convert via PIL → in-memory JPEG → OpenCV BGR
+    # 2) Read raw bytes & convert to OpenCV image
     raw = upload.read()
     try:
         pil_img = Image.open(io.BytesIO(raw)).convert("RGB")
@@ -85,7 +87,7 @@ def predict():
         return jsonify({"error": "Invalid image format"}), 400
 
     try:
-        # 3) Run ONNX detection (silenced terminal logs)
+        # 3) Run ONNX YOLO Detection
         results = yolo.predict(
             source=img,
             imgsz=768,
@@ -93,53 +95,66 @@ def predict():
             verbose=False
         )[0]
 
-        # 4) Build detections list
-        detections = []
+        # 4) Build Raw and Filtered Detections
+        raw_detections = []
+        filtered_detections = []
         for box, conf, cls in zip(
                 results.boxes.xyxy.cpu().numpy(),
                 results.boxes.conf.cpu().numpy(),
                 results.boxes.cls.cpu().numpy()
         ):
-            x1, y1, x2, y2 = box.astype(int).tolist()
-            detections.append({
+            det = {
                 "class": results.names[int(cls)],
                 "confidence": float(conf),
-                "box": [x1, y1, x2, y2]
-            })
+                "box": box.astype(int).tolist()
+            }
+            raw_detections.append(det)
+            if conf >= 0.6:
+                filtered_detections.append({
+                    "class": det["class"],
+                    "confidence": det["confidence"]
+                })
 
-        # 5) Summarize counts per class
-        counts = {}
-        for det in detections:
-            counts[det["class"]] = counts.get(det["class"], 0) + 1
+        # 5) Build Raw and Filtered Counts
+        raw_counts = {}
+        filtered_counts = {}
+        for det in raw_detections:
+            raw_counts[det["class"]] = raw_counts.get(det["class"], 0) + 1
+        for det in filtered_detections:
+            filtered_counts[det["class"]] = filtered_counts.get(det["class"], 0) + 1
 
-        # 6) Extract performance metrics
-        perf = {
-            "pre_ms": round(results.speed["preprocess"], 2),
-            "inf_ms": round(results.speed["inference"], 2),
-            "post_ms": round(results.speed["postprocess"], 2),
-            "shape": [1, 3, 768, 768]
-        }
+        # 6) Compress & Upload to Cloudinary with Fallback
+        try:
+            compressed = compress_to_bytes(img)
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            public_id = f"Garbage/{subfolder}/{house_id}_{ts}"
 
-        # 7) Compress & upload original image
-        compressed = compress_to_bytes(img)
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        public_id = f"{house_id}_{ts}"
-        up = cloudinary.uploader.upload(
-            compressed,
-            public_id=public_id,
-            resource_type="image"
-        )
-        url = up["secure_url"]
-        opt_url, _ = cloudinary.utils.cloudinary_url(
-            public_id, fetch_format="auto", quality="auto:low"
-        )
+            up = cloudinary.uploader.upload(
+                compressed,
+                public_id=public_id,
+                resource_type="image",
+                overwrite=True
+            )
+            url = up.get("secure_url", "Not Uploaded")
+            opt_url, _ = cloudinary.utils.cloudinary_url(
+                public_id, fetch_format="auto", quality="auto:low"
+            )
+        except Exception as e:
+            logging.error(f"Cloudinary upload failed: {e}")
+            url = "Not Uploaded"
+            opt_url = "Not Uploaded"
 
-        # 8) Assemble record for MongoDB
+        # 7) Save Raw Data to MongoDB
         record = {
             "house_id": house_id,
-            "detections": detections,
-            "counts": counts,
-            "performance": perf,
+            "detections": raw_detections,
+            "counts": raw_counts,
+            "performance": {
+                "pre_ms": round(results.speed["preprocess"], 2),
+                "inf_ms": round(results.speed["inference"], 2),
+                "post_ms": round(results.speed["postprocess"], 2),
+                "shape": [1, 3, 768, 768]
+            },
             "model": {
                 "name": "best.onnx",
                 "imgsz": 768,
@@ -153,27 +168,17 @@ def predict():
         ins = predictions_collection.insert_one(record)
         record["_id"] = str(ins.inserted_id)
 
-        # 9) Build optimized response
+        # 8) Prepare Filtered API Response
         response = {
             "id": record["_id"],
             "house_id": record["house_id"],
             "timestamp": record["timestamp"].astimezone(timezone.utc).isoformat(),
-            "ip_address": record["ip_address"],
-
             "image": {
                 "original": record["image_url"],
                 "optimized": record["optimized_url"]
             },
-
-            "detections": record["detections"],
-            "counts": record["counts"],
-            "performance": {
-                "pre_ms": record["performance"]["pre_ms"],
-                "inf_ms": record["performance"]["inf_ms"],
-                "post_ms": record["performance"]["post_ms"]
-            },
-
-            "model": record["model"]
+            "counts": filtered_counts,
+            "detections": filtered_detections
         }
 
         return jsonify(response), 200
