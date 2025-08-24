@@ -7,3 +7,5 @@
 /dataSources/
 /dataSources.local.xml
 venv
+generate_garbage_data.py
+garbage_collection_housewise.json
