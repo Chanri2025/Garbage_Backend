@@ -1,36 +1,37 @@
-# ---------- Base Image ----------
+# Use a lightweight Python base image
 FROM python:3.11-slim
 
-# Avoid Python writing .pyc and enable unbuffered logs
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+# Prevent Python from buffering stdout/stderr and writing .pyc files
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
 
-# Set workdir
+# Set working directory inside the container
 WORKDIR /app
 
-# Install system dependencies required by OpenCV etc.
+# Install system dependencies (for numpy, opencv, etc.)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libgl1 \
+    build-essential \
     libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender1 \
     && rm -rf /var/lib/apt/lists/*
 
-# ---------- Python dependencies ----------
+# Copy requirements first (better for Docker cache)
 COPY requirements.txt .
 
-# Increase pip timeout to handle large wheels / slow network
-ENV PIP_DEFAULT_TIMEOUT=120
-
+# Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# ---------- Application code ----------
-# .dockerignore will exclude .env, .git, venv, etc.
+# Copy the rest of your project
 COPY . .
 
-# Ensure start script is executable
-RUN chmod +x start_app.sh
+# Make sure Python can find your 'routes' package
+ENV PYTHONPATH=/app
 
-# Expose application port (Flask/Gunicorn uses 5001)
+# Expose the port your app uses
 EXPOSE 5001
 
-# Default command: run Gunicorn via your start script
-CMD ["./start_app.sh"]
+# Default command: run with Gunicorn
+# "app:app" = <filename_without_py>:<Flask_app_variable>
+CMD ["gunicorn", "-b", "0.0.0.0:5001", "app:app"]
