@@ -16,7 +16,7 @@ pipeline {
     stages {
         stage('Checkout') {
             steps {
-                git branch: 'main', url: 'https://github.com/Chanri2025/Garbage_Backend.git'
+                git branch: 'master', url: 'https://github.com/Chanri2025/Garbage_Backend.git'
             }
         }
 
@@ -49,7 +49,7 @@ pipeline {
         stage('Push Docker image') {
             steps {
                 withCredentials([usernamePassword(
-                    credentialsId: 'dockerhub-swm-ai-backend',
+                    credentialsId: 'dockerhub-dmmprice',
                     usernameVariable: 'DOCKER_USER',
                     passwordVariable: 'DOCKER_PASS'
                 )]) {
