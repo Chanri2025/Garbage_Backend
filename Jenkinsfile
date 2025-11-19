@@ -3,7 +3,7 @@ pipeline {
 
     environment {
         // Docker Hub image (change to username/repo if needed)
-        REGISTRY        = "swm-ai-backend"
+        REGISTRY        = "dmmprice/swm-ai-backend"
         CONTAINER_NAME  = "swm-ai-backend"
         HOST_PORT       = "5001"
         CONTAINER_PORT  = "5001"
